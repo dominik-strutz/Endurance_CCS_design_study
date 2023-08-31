@@ -86,7 +86,7 @@ landmarks_xy      = latlong2xy(landmarks_latlon[:, 0]     , landmarks_latlon[:, 
 
 # %%
 
-if not os.path.exists('./data/endurance_land_stations.csv'):
+if not os.path.exists('./data/endurance_land_stations.pkl'):
     
     from obspy import UTCDateTime
     from obspy.clients.fdsn import Client
@@ -110,9 +110,9 @@ if not os.path.exists('./data/endurance_land_stations.csv'):
         seismic_inventory[sta.code] = {'lat': sta.latitude, 'lon': sta.longitude, 'elevation': sta.elevation}
     seismic_inventory = pd.DataFrame(seismic_inventory).T
     
-    seismic_inventory.to_csv('./data/endurance_land_stations.csv', sep=' ', header=False, index=False)
+    seismic_inventory.to_pickle('./data/endurance_land_stations.pkl')
 else:
-    seismic_inventory = pd.read_csv('./data/endurance_land_stations.csv', sep=' ', header=None, names=['station', 'lat', 'lon', 'elevation']) 
+    seismic_inventory = pd.read_pickle('./data/endurance_land_stations.pkl') 
 
 seismic_inventory['rms_noise'] = np.array([0.3,0.3,1.3,1.1,0.8,0.8,1.3,1.3,])
 
