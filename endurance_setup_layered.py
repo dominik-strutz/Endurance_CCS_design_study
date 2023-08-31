@@ -86,11 +86,11 @@ landmarks_xy      = latlong2xy(landmarks_latlon[:, 0]     , landmarks_latlon[:, 
 
 # %%
 
-from obspy import UTCDateTime
-from obspy.clients.fdsn import Client
-from obspy.core.inventory import read_inventory
-
-if not os.path.exists('./data/endurance_land_stations.xml'):
+if not os.path.exists('./data/endurance_land_stations.csv'):
+    
+    from obspy import UTCDateTime
+    from obspy.clients.fdsn import Client
+    from obspy.core.inventory import read_inventory
     
     fdsn_client = Client('IRIS')
 
@@ -104,16 +104,15 @@ if not os.path.exists('./data/endurance_land_stations.xml'):
         minlongitude=lon_min, maxlongitude=lon_max,
         level='channel'
         )
-
-    inv.write('./data/endurance_land_stations.xml', format='stationxml')
-
+    
+    seismic_inventory = {}
+    for sta in inv[0]:
+        seismic_inventory[sta.code] = {'lat': sta.latitude, 'lon': sta.longitude, 'elevation': sta.elevation}
+    seismic_inventory = pd.DataFrame(seismic_inventory).T
+    
+    seismic_inventory.to_csv('./data/endurance_land_stations.csv', sep=' ', header=False, index=False)
 else:
-    inv = read_inventory('./data/endurance_land_stations.xml', format='stationxml')
-
-seismic_inventory = {}
-for sta in inv[0]:
-    seismic_inventory[sta.code] = {'lat': sta.latitude, 'lon': sta.longitude, 'elevation': sta.elevation}
-seismic_inventory = pd.DataFrame(seismic_inventory).T
+    seismic_inventory = pd.read_csv('./data/endurance_land_stations.csv', sep=' ', header=None, names=['station', 'lat', 'lon', 'elevation']) 
 
 seismic_inventory['rms_noise'] = np.array([0.3,0.3,1.3,1.1,0.8,0.8,1.3,1.3,])
 
