@@ -85,11 +85,13 @@ hornsea_4_xy      = latlong2xy(hornsea_4_latlon[:, 0]     , hornsea_4_latlon[:, 
 landmarks_xy      = latlong2xy(landmarks_latlon[:, 0]     , landmarks_latlon[:, 1]     , topo_data_latlon)
 
 # %%
-from obspy import UTCDateTime
-from obspy.clients.fdsn import Client
-from obspy.core.inventory import read_inventory
 
 if not os.path.exists('./data/endurance_land_stations.xml'):
+    
+    from obspy import UTCDateTime
+    from obspy.clients.fdsn import Client
+    from obspy.core.inventory import read_inventory
+    
     fdsn_client = Client('IRIS')
 
     #TODO: UKarray (UR) stations are not available on fdsn
