@@ -108,7 +108,7 @@ if not os.path.exists('./data/endurance_land_stations.xml'):
     inv.write('./data/endurance_land_stations.xml', format='stationxml')
 
 else:
-    inv = read_inventory('./data/endurance_land_stations.xml')
+    inv = read_inventory('./data/endurance_land_stations.xml', format='stationxml')
 
 seismic_inventory = {}
 for sta in inv[0]:
