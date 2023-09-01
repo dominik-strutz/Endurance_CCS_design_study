@@ -73,6 +73,7 @@ topo_data_xy = xr.DataArray(
 
 # %%
 from geographic_data import landmarks_df, landmarks_latlon, endurance_area_latlon, hornsea_4_latlon
+from geographic_data import york_array_centre_latlon, boulby_mine_latlon
 
 def latlong2xy(lat, lon, topo_xarray):
     E, N = add_distance_coordinates(topo_xarray)
@@ -225,8 +226,8 @@ tf.config.threading.set_inter_op_parallelism_threads(1)
 import NES
 
 Vel = NES.velocity.HorLayeredModel(
-    depths = np.array([-0.353, 2.520, 7.550, 18.870, 34.150,  50.0])*1e3,
-    v     =  np.array([   4.0,   5.9,   6.45,    7.0,   8.0,   8.0])*1e3,
+    depths = np.array([0, -z_max_layerd/1e3, 2.520, 7.550, 18.870, 34.150])*1e3,
+    v     =  np.array([4.0,  4.0,   5.9,   6.45,    7.0,   8.0,])*1e3,
     xmin  =  [      0,       0, -z_max_layerd],
     xmax  =  [x.max(), y.max(), -z_min_layerd],
 )
@@ -241,7 +242,7 @@ Eik_nn = NES.NES_TP(velocity=Vel, # velocity model (see NES.Interpolator)
                  )
 
 Eik_nn.build_model(
-    nl=5, # number of layers
+    nl=4, # number of layers
     nu=100, # number of units (may be a list)
     act='ad-gauss-1', # acivation funciton ('ad' means adaptive, '1' means slope scale)
     out_act='ad-sigmoid-1', # output activation, 'sigmoid' stands for improved factorization
@@ -267,7 +268,7 @@ else:
     h = Eik_nn.train(
         x_train=num_pts, # number of random colocation points for training
         tolerance=2e-3, # tolerance value for early stopping (expected error with 2nd-order f-FMM)
-        epochs=1000,
+        epochs=300,
         verbose=0,
         callbacks=[TqdmCallback(verbose=0, miniters=10, mininterval=5)], # progress bar
         batch_size=int(num_pts/4),

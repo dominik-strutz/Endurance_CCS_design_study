@@ -15,33 +15,26 @@ def plot_cities(ax, projPC, landmarks):
         label='Cities')
     
     for i, txt in enumerate(landmarks.index):    
-        if txt != 'Boulby Mine':
-            ax.scatter(
-                landmarks['lon'][txt], landmarks['lat'][txt],
-                color='blue', marker='o', s=30, transform=projPC,
-                )
+        ax.scatter(
+            landmarks['lon'][txt], landmarks['lat'][txt],
+            color='blue', marker='o', s=30, transform=projPC,
+            )
 
-            ax.annotate(
-                txt, 
-                xy = (landmarks['lon'][i], landmarks['lat'][i]),
-                xytext = (landmarks['lon'][i], landmarks['lat'][i]-0.04),
-                size=7,
-                horizontalalignment='center',
-                verticalalignment='top',
-                transform=projPC)
-        else:
-            ax.scatter(
-                landmarks['lon'][txt], landmarks['lat'][txt],
-                color='black',
-                marker='s',
-                s=50,
-                transform=projPC,
-                label='Boulby Mine')
+        ax.annotate(
+            txt, 
+            xy = (landmarks['lon'][i], landmarks['lat'][i]),
+            xytext = (landmarks['lon'][i], landmarks['lat'][i]-0.04),
+            size=7,
+            horizontalalignment='center',
+            verticalalignment='top',
+            transform=projPC)
 
 def plot_geographic_settings(
     ax, lon_min, lon_max, lat_min, lat_max,
     landmarks_df, endurance_area_latlon, hornsea_4_latlon,
     seismic_inventory, projPC,
+    add_mine=None,
+    add_cities=True,
     add_land=False,
     add_coastlines=False,):
     
@@ -65,7 +58,14 @@ def plot_geographic_settings(
         transform=projPC, label='Hornsea 4 area',
     )
 
-    plot_cities(ax, projPC, landmarks_df)
+    if add_mine is not None:
+        ax.scatter(
+            add_mine[1], add_mine[0],
+            color='k', marker='s', s=30, transform=projPC, label='Boulby mine'
+            )
+        
+    if add_cities:
+        plot_cities(ax, projPC, landmarks_df)
 
     ax.scatter(
         seismic_inventory['lon'], seismic_inventory['lat'], transform=projPC,
@@ -105,21 +105,6 @@ class FixPointNormalize(matplotlib.colors.Normalize):
         x, y = [self.vmin, self.sealevel, self.vmax], [0, self.col_val, 1]
         return np.ma.masked_array(np.interp(value, x, y))
     
-def add_distance_coordinates(data_array):
-    geod = Geodesic()
-
-    E, N = np.meshgrid(data_array.coords['longitude'], data_array.coords['latitude'], indexing='ij')
-    N_coords = np.stack([E[0, :], N[0, :]], axis=-1)[:, ::-1]
-    E_coords = np.stack([E[:, 1], N[:, 1]], axis=-1)[:, ::-1]
-
-    del E, N
-
-    E_km = geod.inverse(E_coords[:1], E_coords)[:, 0]
-    N_km = geod.inverse(N_coords[:1], N_coords)[:, 0]
-
-    data_array = data_array.assign_coords({'E': ('longitude', E_km,), 'N': ('latitude', N_km,)})
-    
-    return data_array
 
 def construct3Dmodel(z, crust_1_dataset, property='vp'):
     
@@ -187,11 +172,51 @@ def construct3Dseismicmodel(z, topo_data, ):
             'rho': construct3Dmodel(z, crust_1_dataset, property='rho'),
         }
     )
-    
-def latlong2xy(lat, lon, topo_data):
-    topo_select = topo_data.interp(longitude=lon, latitude=lat, method='linear')
-    return np.vstack((topo_select.coords['E'].data, topo_select.coords['N'].data)).T
 
+def add_distance_coordinates(data_array):
+    geod = Geodesic()
+
+    E, N = np.meshgrid(data_array.coords['lon'], data_array.coords['lat'], indexing='ij')
+    N_coords = np.stack([E[0, :], N[0, :]], axis=-1)[:, ::-1]
+    E_coords = np.stack([E[:, 1], N[:, 1]], axis=-1)[:, ::-1]
+
+    del E, N
+
+    E_km = geod.inverse(E_coords[:1], E_coords)[:, 0]
+    N_km = geod.inverse(N_coords[:1], N_coords)[:, 0]
+
+    data_array = data_array.assign_coords({'E': ('lon', E_km,), 'N': ('lat', N_km,)})
+    
+    return data_array
+
+
+def latlong2xy(lat, lon, topo_xy, topo_latlong):
+    
+    lat_grid, lon_grid = topo_latlong.coords['lat'].values, topo_latlong.coords['lon'].values
+    x_grid, y_grid = topo_xy.coords['E'].values, topo_xy.coords['N'].values
+    
+    lat_indices = []
+    lon_indices = []
+    
+    for lat_i, lon_i in zip(lat, lon):
+        lat_indices.append(np.argmin(np.abs(lat_grid - lat_i)))
+        lon_indices.append(np.argmin(np.abs(lon_grid - lon_i)))
+    
+    return x_grid[lon_indices], y_grid[lat_indices]
+    
+def xy2latlong(x, y, topo_xy, topo_latlong):
+        
+    lat_grid, lon_grid = topo_latlong.coords['lat'].values, topo_latlong.coords['lon'].values
+    x_grid, y_grid = topo_xy.coords['E'].values, topo_xy.coords['N'].values
+        
+    x_indices = []
+    y_indices = []
+    
+    for x_i, y_i in zip(x, y):
+        x_indices.append(np.argmin(np.abs(x_grid - x_i)))
+        y_indices.append(np.argmin(np.abs(y_grid - y_i)))
+    
+    return lat_grid[y_indices], lon_grid[x_indices]
 
 def plot_modelspace_dist_slice(
     ax, p_dist, XX, YY, ZZ,
