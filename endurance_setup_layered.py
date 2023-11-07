@@ -123,238 +123,85 @@ seismic_stations_xy = latlong2xy(seismic_stations_latlon[:, 0], seismic_stations
 # %% [markdown]
 # # Seismic Model
 
-# %%
-def construct3Dmodel(z, crust_1_dataset, property='vp'):
-    
-    x = crust_1_dataset['E'].data
-    y = crust_1_dataset['N'].data
-    
-    property_air = np.nan
-    
-    if property == 'vp':
-        property_air = 330.0
-    elif property == 'vs':
-        property_air = 0.001 # not zero to avoid division by zero
-    elif property == 'rho':
-        property_air = 1.293
-    
-    # Create a 3D model
-    model = xr.DataArray(
-        np.ones((len(x), len(y), len(z)))*property_air,
-        dims=['x', 'y', 'z'],
-        coords={'x': x, 'y': y, 'z': z},
-    )
-    
-    layers = ['water', 'upper_sediments', 'middle_sediments', 'lower_sediments',
-              'upper_crust', 'middle_crust', 'lower_crust',]
-    
-    for l_j in layers:
-        layer_top  = l_j + '_top'
-        layer_prop = l_j + '_' + property
-        
-        layer_top_data = crust_1_dataset[layer_top]
-        
-        if layer_top_data.isnull().any():
-            continue
-        if not (layer_top_data > z[-1]/1e3).all():
-            continue
-        
-        for i, z_i in enumerate(z):
-            mask = np.array(layer_top_data.data >= z_i/1e3) 
-            model[:, :, i].data[mask] = crust_1_dataset[layer_prop].data[mask]*1e3
+offset_spacing  =  0.2 * 1e3 # 10 km
+depth_spacing = offset_spacing / 10
 
-    return model
-
-def construct3Dseismicmodel(z, topo_data, model='crust1'):
-    
-    
-    if model == 'crust1':
-        vp_model = xr.open_dataset('./data/CRUST1.0-vp.r0.1.nc')
-        vs_model = xr.open_dataset('./data/CRUST1.0-vs.r0.1.nc')
-        rho_model = xr.open_dataset('./data/CRUST1.0-rho.r0.1.nc')
-
-        lat_min, lat_max = topo_data.coords['latitude'].min(), topo_data.coords['latitude'].max()
-        lon_min, lon_max = topo_data.coords['longitude'].min(), topo_data.coords['longitude'].max()
-
-        crust_1_dataset = xr.merge([vp_model, vs_model, rho_model])
-        crust_1_dataset = crust_1_dataset.sel(latitude=slice(lat_min-2, lat_max+2), longitude=slice(lon_min-2, lon_max+2)) # some padding for interpolation
-
-        crust_1_dataset = crust_1_dataset.interp(latitude=topo_data.coords['latitude'], longitude=topo_data.coords['longitude'], method='quadratic')
-        # vp_model = vp_model.interp(latitude=topo_data.coords['latitude'], longitude=topo_data.coords['longitude'], method='nearest')
-
-        crust_1_dataset['upper_sediments_top'] = topo_data/1e3
-        crust_1_dataset['water_top'].values = np.zeros_like(crust_1_dataset['water_top'].values)
+offset_seismic_min = 0.0
+offset_seismic_max = (np.max(topo_data_xy.coords['E'].data)**2 + np.max(topo_data_xy.coords['N'].data)**2)**0.5*1.1
+offset_seismic     = np.arange(offset_seismic_min, offset_seismic_max, offset_spacing)
+offset_N = len(offset_seismic)
+d_offset = offset_seismic[1] - offset_seismic[0]
 
 
-        return xr.Dataset(
-            {
-                'vp': construct3Dmodel(z, crust_1_dataset, property='vp'),
-                'vs': construct3Dmodel(z, crust_1_dataset, property='vs'),
-                'rho': construct3Dmodel(z, crust_1_dataset, property='rho'),
-            }
-        )
-      
-    else:
-        raise NotImplementedError('Only crust1 model is implemented')
+depth_seismic_min = - 40000.0
+depth_seismic_max =    2000.0
+depth_seismic    = np.arange(depth_seismic_min, depth_seismic_max, depth_spacing)
+depth_N = len(depth_seismic)
+d_depth = depth_seismic[1] - depth_seismic[0]
 
-# %%
-# z_max_crust1 =   600 # m
-# z_min_crust1 = -3600 # m
+# print(f'offset: {offset_seismic_min} - {offset_seismic_max} ({len(offset_seismic)}, {d_offset})')
+# print(f'depth:  {depth_seismic_min} - {depth_seismic_max} ({len(depth_seismic)}, {d_depth})')
 
-# dz = 50 #
-# crust1_seimic3Dmodel = construct3Dseismicmodel(z, topo_data)
-
-
-# %%
-z_max_layerd =    600 # m
-z_min_layerd = -40000 # m
-
-x = topo_data_xy.coords['E'].data
-y = topo_data_xy.coords['N'].data
-z = np.linspace(z_min_layerd, z_max_layerd, x.shape[0])
-
-# %% [markdown]
-# # Neural Eikonal Solver
-
-# %%
-import tensorflow as tf
-from tqdm.keras import TqdmCallback
-
-tf.config.threading.set_intra_op_parallelism_threads(1)
-tf.config.threading.set_inter_op_parallelism_threads(1)
-
-import NES
-
-Vel = NES.velocity.HorLayeredModel(
-    depths = np.array([0, -z_max_layerd/1e3, 2.520, 7.550, 18.870, 34.150])*1e3,
-    v     =  np.array([4.0,  4.0,   5.9,   6.45,    7.0,   8.0,])*1e3,
-    xmin  =  [      0,       0, -z_max_layerd],
-    xmax  =  [x.max(), y.max(), -z_min_layerd],
+seismic_grid = xr.DataArray(
+    np.moveaxis(np.linspace(depth_seismic_min, depth_seismic_max, depth_N).repeat(offset_N).reshape(depth_N, offset_N), 0, -1),
+    dims=('offset', 'depth'),
+    coords={
+        'offset': offset_seismic,
+        'depth': depth_seismic,
+    }
 )
 
-Eik_nn = NES.NES_TP(velocity=Vel, # velocity model (see NES.Interpolator)
-                #  eikonal=eikonal # optional, by default isotropic eikonal equation
-                 )
+depths = -np.array([0, 1000/1e3, 2.520, 7.550, 18.870, 34.150])*1e3
+v_p    =  np.array([4.0,  4.0,   5.9,   6.45,    7.0,   8.0,])*1e3
+
+elevation_grid = seismic_grid.values
+
+seismic_grid.values = np.ones_like(seismic_grid.values)*8000.0
 
 
-Eik_nn = NES.NES_TP(velocity=Vel, # velocity model (see NES.Interpolator)
-                #  eikonal=eikonal # optional, by default isotropic eikonal equation
-                 )
+seismic_grid.values[
+    (elevation_grid > -34.150e3)
+] = 7000.0
 
-Eik_nn.build_model(
-    nl=4, # number of layers
-    nu=100, # number of units (may be a list)
-    act='ad-gauss-1', # acivation funciton ('ad' means adaptive, '1' means slope scale)
-    out_act='ad-sigmoid-1', # output activation, 'sigmoid' stands for improved factorization
-    input_scale=True, # inputs scaling
-    factored=True, # factorization
-    out_vscale=True, # constraining by the slowest and the fastest solutions
-    reciprocity=True, # symmetrizaion for the reciprocity principle 
-    )
+seismic_grid.values[
+    (elevation_grid > -18.870e3)
+] = 7000.0
 
-Eik_nn.compile(
-    optimizer=None, # optimizer can be set manually
-    loss='mae', # loss function
-    lr=0.003, # learning rate for Adam optimizer
-    decay=0.0005 # decay rate for Adam optimizer
-    )
+seismic_grid.values[
+    (elevation_grid > -7.550e3)
+] = 6450.0
 
-filepath_eikonal_nn = 'NES-TP_Model_endurance_BGS_layered'
+seismic_grid.values[
+    (elevation_grid > -2.520e3)
+] = 5900.0
 
-if os.path.exists(filepath_eikonal_nn):
-    Eik_nn = NES.NES_TP.load(filepath_eikonal_nn)
-else:
-    num_pts = 50000
-    h = Eik_nn.train(
-        x_train=num_pts, # number of random colocation points for training
-        tolerance=2e-3, # tolerance value for early stopping (expected error with 2nd-order f-FMM)
-        epochs=300,
-        verbose=0,
-        callbacks=[TqdmCallback(verbose=0, miniters=10, mininterval=5)], # progress bar
-        batch_size=int(num_pts/4),
-    )
-    
-    plt.plot(h.history['loss'])
-    plt.yscale('log')
-    plt.show()
-    
-    Eik_nn.save(filepath_eikonal_nn, # path and filename which defines the folder with saved model
-            save_optimizer=False, # optimizer state can be saved to continue training
-            training_data=False) # training data can be saved
+seismic_grid.values[
+    (elevation_grid > 0)
+] = 4000.0
 
-# %%
-class Endurance_Traveltimes:
-    def __init__(self, eikonal_nn_path, topo_data):
-        self.topo_data = topo_data
-        self.eikonal_nn_path = eikonal_nn_path
-        self.eikonal_nn = None
+seismic_grid.values[
+    (elevation_grid > 1000)
+] = 330.0
 
-    def _load_eikonal(self):
-        if self.eikonal_nn is None:
-            with open(os.devnull, "w") as f, contextlib.redirect_stdout(f): # suppress print
-                self.eikonal_nn = NES.NES_TP.load(self.eikonal_nn_path)
-        else:
-            pass
-        
-    def _discard_eikonal(self):
-        del self.eikonal_nn
-        self.eikonal_nn = None
 
-    def forward(self, design, model_samples, **kwargs):
-        
-        self._load_eikonal()
-                
-        inp = self._prepare_input(design, model_samples)
-        out = self.eikonal_nn.Traveltime(inp, verbose=0)
-        
-        out = out.reshape(model_samples.shape[0], design.shape[0])
-        
-        self._discard_eikonal()
-        
-        return torch.from_numpy(out)
-    
-    def hessian(self, design, model_samples, **kwargs):
+E_min, E_max = E.min(), E.max()
+N_min, N_max = N.min(), N.max()
 
-        self._load_eikonal()
-                
-        inp = self._prepare_input(design, model_samples)
-        
-        out_flat = self.eikonal_nn.HessianS(inp, verbose=0)
-                
-        out_flat = out_flat.reshape(model_samples.shape[0], design.shape[0], model_samples.shape[-1]*2)
-                
-        out = np.zeros((model_samples.shape[0], design.shape[0], 3, 3))
-        out[..., np.triu_indices(3)[0], np.triu_indices(3)[1]] = out_flat
-        out[..., np.tril_indices(3)[0], np.tril_indices(3)[1]] = out_flat
-        
-        self._discard_eikonal()
-        
-        return torch.from_numpy(out)
-    
-    def jacobian(self, design, model_samples,  **kwargs):
-        
-        self._load_eikonal()
+def get_elevation(points, topo_ds):
+    east = xr.DataArray(points[..., 0], dims='points')
+    north = xr.DataArray(points[..., 1], dims='points')
+    elevations = topo_ds.interp(
+        E=east, N=north, method='nearest').values
+    return torch.from_numpy(elevations)
 
-        inp = self._prepare_input(design, model_samples)
-        out_flat = self.eikonal_nn.GradientS(inp, verbose=0)
-        out = out_flat.reshape(model_samples.shape[0], design.shape[0], model_samples.shape[-1])
-        
-        self._discard_eikonal()
-        
-        return torch.from_numpy(out)
-    
-    def _prepare_input(self, design, model_samples, **kwargs):
-        
-        receivers = design[:, :3]
-        
-        # flip z-axis
-        design[:, 2] = -design[:, 2]
-        model_samples[:, 2] = -model_samples[:, 2]
-        
-        inp_indices = np.indices((model_samples.shape[0], receivers.shape[0])).reshape(2, -1).T
-        inp = np.hstack((model_samples[inp_indices[:,0]], receivers[inp_indices[:,1]]))
-        
-        return inp
+receiver_depth_spacing = 10
+receiver_depths = np.arange(-1700, 700, receiver_depth_spacing)
+# print(f'Number of receiver depths: {len(receiver_depths)}')
+
+
+distance_spacing = 500
+distances = np.arange(0, ((E_max-E_min)**2 + (N_max-N_min)**2)**0.5, distance_spacing)
+# print(f'Number of distances: {len(distances)}')
 
 # %% [markdown]
 # # Prior Distribution
@@ -379,4 +226,238 @@ prior_dist = zuko.distributions.Mixture(dist.MultivariateNormal(
 
 prior_samples_test = prior_dist.sample((10000,))
 
+prior_mean = wells_coords_xy.mean(axis=0)
+# print(f'Prior mean: {prior_mean}')
 
+prior_bound_x_min = prior_mean[0] - 5e3 * 3 # five standard deviations
+prior_bound_x_max = prior_mean[0] + 5e3 * 3 
+
+prior_bound_y_min = prior_mean[1] - 5e3 * 3 
+prior_bound_y_max = prior_mean[1] + 5e3 * 3 
+
+prior_bound_z_min = prior_mean[2] - 5e2 * 3
+prior_bound_z_max = prior_mean[2] + 5e2 * 3
+
+
+source_depth_spacing = 10
+
+source_depths = np.arange(prior_bound_z_min, prior_bound_z_max, source_depth_spacing)
+
+# print(f'Number of source depths: {len(source_depths)}')
+# print(f'Minimum source depth: {source_depths.min()} , maximum source depth: {source_depths.max()}')
+
+
+import pykonal
+
+class Pykonal_Forward:
+    def __init__(self, x, z, seismic_grid):
+        self.x_min, self.x_max, self.x_N = x.min(), x.max(), x.size
+        self.z_min, self.z_max, self.z_N = z.min(), z.max(), z.size      
+
+        self.dx = (self.x_max - self.x_min) / self.x_N
+        self.dz = (self.z_max - self.z_min) / self.z_N
+        
+        # normalising
+        self.max_coordinate = np.max( [(self.x_max - self.x_min), (self.z_max - self.z_min)])
+        
+        self.normalising = np.array([self.max_coordinate, self.max_coordinate])
+        
+        self.offset = np.array([self.x_min, self.z_min])
+        
+        self.x_min, self.x_max = self.x_min - self.offset[0], self.x_max - self.offset[0]
+        self.z_min, self.z_max = self.z_min - self.offset[1], self.z_max - self.offset[1]
+        
+        self.x_min, self.x_max = self.x_min / self.normalising[0], self.x_max / self.normalising[0]
+        self.z_min, self.z_max = self.z_min / self.normalising[1], self.z_max / self.normalising[1]
+        
+        self.x_N, self.z_N = self.x_N, self.z_N
+        self.dx, self.dz = self.dx / self.normalising[0], self.dz / self.normalising[1]
+        
+        # shift to positive
+        self.x_min, self.x_max = self.x_min + 1, self.x_max + 1
+        self.z_min, self.z_max = self.z_min + 1, self.z_max + 1    
+            
+        # add buffer
+        self.x_min, self.x_max = self.x_min - 1*self.dx, self.x_max + 1*self.dx
+        self.z_min, self.z_max = self.z_min - 1*self.dz, self.z_max + 1*self.dz
+        
+        self.x_N += 2
+        self.z_N += 2
+        
+        self.velocity = seismic_grid.values
+        # add buffer
+        self.velocity = np.pad(self.velocity, (1, 1), mode='edge')
+                
+        # print(f'x: {self.x_min} - {self.x_max} ({self.x_N}, {self.dx})')
+        # print(f'z: {self.z_min} - {self.z_max} ({self.z_N}, {self.dz})')
+                
+        
+    def __call__(self, source_coords, receiver_coords):
+
+        source_coords = ((source_coords-self.offset) / self.normalising) + 1
+        receiver_coords = ((receiver_coords-self.offset) / self.normalising) + 1
+        
+        # add zero in the second entry of the last dimension
+        source_coords = np.insert(source_coords, 1, 0, axis=-1)
+        receiver_coords = np.insert(receiver_coords, 1, 0, axis=-1)
+        
+        solver = pykonal.solver.PointSourceSolver()
+        solver.velocity.min_coords     = self.x_min, 0, self.z_min
+        solver.velocity.node_intervals = self.dx, 1, self.dz
+        solver.velocity.npts           = self.x_N, 1, self.z_N
+        solver.velocity.values         = self.velocity[:, None, :]
+        
+        solver.src_loc = source_coords
+        solver.solve()
+        
+        solver.traveltime.values *= self.max_coordinate
+                
+        return solver.traveltime.resample(receiver_coords).squeeze()
+
+pyk_forward = Pykonal_Forward(
+    offset_seismic, depth_seismic, seismic_grid)
+
+import socket
+# print(socket.gethostname())
+hostname = socket.gethostname()
+
+if not hostname == 'TP-P14s':
+    filename_tt_table = f'data/eikonal_lookup/eikonal_lookup_layered_{receiver_depth_spacing:.0f}_rdepth_{source_depth_spacing:.0f}_sdepth_{distance_spacing:.0f}_distance.nc'
+else:
+    filename_tt_table = f'/home/dstrutz/Downloads/ssh_cache/eikonal_lookup/eikonal_lookup_layered_{receiver_depth_spacing:.0f}_rdepth_{source_depth_spacing:.0f}_sdepth_{distance_spacing:.0f}_distance.nc'
+    
+# print(f'Filename: {filename_tt_table}')
+
+
+d_type = np.float32
+
+tt_array = xr.DataArray(
+    np.zeros((len(source_depths), len(receiver_depths), len(distances)), dtype=d_type),
+    dims=['source_depth', 'receiver_depth', 'distance'],
+    coords=dict(
+        source_depth=source_depths,
+        receiver_depth=receiver_depths,
+        distance=distances,
+    ),
+)
+
+    # print('Array dimensions: ', tt_array.shape)
+    # print('Memory usage: {:.2f} GB'.format(tt_array.nbytes / 1e9))
+
+receivers = torch.cartesian_prod(
+    torch.from_numpy(distances).double(),
+    torch.from_numpy(source_depths).double())
+receivers = receivers.numpy()
+
+if os.path.exists(filename_tt_table):
+    tt_array = xr.load_dataarray(
+        filename_tt_table, engine='netcdf4', format='NETCDF4')
+else:
+    for i, rec_depth in tqdm.tqdm(enumerate(receiver_depths), total=len(receiver_depths)):
+        
+        source = np.array([0, rec_depth])
+        
+        out = pyk_forward(
+            source_coords=source,
+            receiver_coords=receivers,)
+        
+        out = out.reshape(len(distances), len(source_depths)).T
+        
+        tt_array[:, i, :] = out
+        
+    tt_array.to_netcdf(filename_tt_table, engine='netcdf4', format='NETCDF4')
+    
+class Scipy_Lookup_Interpolation:
+    def __init__(self, tt_array):
+        self.tt_array = tt_array
+
+                
+    def __call__(self, offsets, source_depth, receiver_depth):
+                        
+        interp_in = np.stack([source_depth, receiver_depth, offsets], axis=-1) 
+
+        interp_out = self.tt_array.interp(
+            source_depth=xr.DataArray(interp_in[:, 0], dims='interp'),
+            receiver_depth=xr.DataArray(interp_in[:, 1], dims='interp'),
+            distance=xr.DataArray(interp_in[:, 2], dims='interp'),
+            kwargs = dict(fill_value=None),
+        )
+        
+        interp_out = interp_out.values
+        interp_out = torch.from_numpy(interp_out).float()
+        
+        return interp_out
+
+
+class Torch_Lookup(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, offsets, source_depth, receiver_depth, interpolator):
+        ctx.offsets = offsets
+        ctx.source_depth = source_depth
+        ctx.receiver_depth = receiver_depth
+        
+        ctx.interpolator = interpolator
+        
+        return interpolator(offsets, source_depth, receiver_depth)
+    
+    def backward(ctx, grad_output):
+        interpolator = ctx.interpolator
+        
+        eps = 0.1
+                
+        unit_vec_offsets = torch.eye(1) * eps
+        unit_vec_source_depth = torch.eye(1) * eps
+        unit_vec_receiver_depth = torch.eye(1) * eps
+        
+        d_offsets = ctx.offsets.repeat(1, 1) + unit_vec_offsets.unsqueeze(1)
+        d_source_depth = ctx.source_depth.repeat(1, 1) + unit_vec_source_depth.unsqueeze(1)
+        d_receiver_depth = ctx.receiver_depth.repeat(1, 1) + unit_vec_receiver_depth.unsqueeze(1)
+
+        d_offsets = (interpolator(d_offsets, ctx.source_depth, ctx.receiver_depth) - \
+            interpolator(ctx.offsets, ctx.source_depth, ctx.receiver_depth)) / eps
+        d_source_depth = (interpolator(ctx.offsets, d_source_depth, ctx.receiver_depth) - \
+            interpolator(ctx.offsets, ctx.source_depth, ctx.receiver_depth)) / eps
+        d_receiver_depth = (interpolator(ctx.offsets, ctx.source_depth, d_receiver_depth) - \
+            interpolator(ctx.offsets, ctx.source_depth, ctx.receiver_depth)) / eps
+        
+        d_offsets = d_offsets.moveaxis(0, -1)
+        d_source_depth = d_source_depth.moveaxis(0, -1)
+        d_receiver_depth = d_receiver_depth.moveaxis(0, -1)
+        
+        d_offsets = d_offsets * grad_output.unsqueeze(-1)
+        d_source_depth = d_source_depth * grad_output.unsqueeze(-1)
+        d_receiver_depth = d_receiver_depth * grad_output.unsqueeze(-1)
+        
+        return d_offsets, d_source_depth, d_receiver_depth, None
+        
+class TT_Lookup:
+    def __init__(self, tt_array_filename):
+        
+        self.tt_array = xr.open_dataarray(
+            tt_array_filename, engine='netcdf4', format='NETCDF4')
+        
+        self.interpolator = Scipy_Lookup_Interpolation(self.tt_array)
+        self.forward = Torch_Lookup.apply
+        
+    def __call__(self, model, design):
+        
+        model_shape = model.shape
+        design_shape = design.shape
+        
+        indices = torch.cartesian_prod(
+            torch.arange(model_shape[0]),
+            torch.arange(design_shape[0]),
+        )
+        
+        model = model[indices[:, 0]]
+        design = design[indices[:, 1]]
+        
+        
+        
+        offsets = np.linalg.norm((model[..., :2] - design[..., :2]), axis=-1)
+        source_depth = model[..., 2]
+        receiver_depth = design[..., 2]
+
+        out = self.forward(offsets, source_depth, receiver_depth, self.interpolator).reshape(model_shape[0], design_shape[0])
+        
+        return out
