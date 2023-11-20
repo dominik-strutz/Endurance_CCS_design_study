@@ -144,9 +144,6 @@ class TT_Lookup:
         else:
             self.tt_array = xr.open_dataarray(
                 tt_array_filename)
-
-        self.tt_array = xr.open_dataarray(
-            tt_array_filename, engine='netcdf4', format='NETCDF4')
         
         self.interpolator = Scipy_Lookup_Interpolation(self.tt_array)
         self.forward = Torch_Lookup.apply
