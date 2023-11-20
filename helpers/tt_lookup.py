@@ -2,6 +2,7 @@ import numpy as np
 import torch
 import pykonal
 import xarray as xr
+import socket
 
 class Pykonal_Forward:
     def __init__(self, x, z, seismic_grid):
@@ -135,6 +136,15 @@ class Torch_Lookup(torch.autograd.Function):
 class TT_Lookup:
     def __init__(self, tt_array_filename):
         
+
+        hostname = socket.gethostname()
+        if hostname == 'stream.geos.ed.ac.uk':
+            self.tt_array = xr.open_dataarray(
+                tt_array_filename, engine='netcdf4', format='NETCDF4')
+        else:
+            self.tt_array = xr.open_dataarray(
+                tt_array_filename, engine='netcdf4', format='NETCDF4')
+
         self.tt_array = xr.open_dataarray(
             tt_array_filename, engine='netcdf4', format='NETCDF4')
         
@@ -175,7 +185,6 @@ from .model_prior import wells_coords_xy
 
 from .geographic_data import topo_data_xy, E, N
 
-import socket
 hostname = socket.gethostname()
 
 prior_mean = wells_coords_xy.mean(axis=0)
