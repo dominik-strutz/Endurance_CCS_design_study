@@ -143,7 +143,7 @@ class TT_Lookup:
                 tt_array_filename, engine='netcdf4', format='NETCDF4')
         else:
             self.tt_array = xr.open_dataarray(
-                tt_array_filename, engine='netcdf4', format='NETCDF4')
+                tt_array_filename)
 
         self.tt_array = xr.open_dataarray(
             tt_array_filename, engine='netcdf4', format='NETCDF4')
