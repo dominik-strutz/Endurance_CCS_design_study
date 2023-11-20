@@ -261,8 +261,13 @@ else:
 # print(f'Filename: {filename_tt_table}')
 
 if os.path.exists(filename_tt_table):
-    tt_array = xr.load_dataarray(
-        filename_tt_table, engine='netcdf4', format='NETCDF4')
+    
+    if hostname not in ['stream.geos.ed.ac.uk',]:
+        tt_array = xr.load_dataarray(
+            filename_tt_table, engine='netcdf4', format='NETCDF4')
+    else:
+        tt_array = xr.load_dataarray(
+            filename_tt_table)
 
 else:
     receivers = torch.cartesian_prod(
