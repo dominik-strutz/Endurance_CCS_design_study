@@ -1,6 +1,5 @@
 import numpy as np
 import torch
-import pykonal
 import xarray as xr
 import socket
 
@@ -48,7 +47,7 @@ class Pykonal_Forward:
                 
         
     def __call__(self, source_coords, receiver_coords):
-
+        import pykonal
         source_coords = ((source_coords-self.offset) / self.normalising) + 1
         receiver_coords = ((receiver_coords-self.offset) / self.normalising) + 1
         
